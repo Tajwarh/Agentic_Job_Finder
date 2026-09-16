@@ -25,6 +25,39 @@ llm = ChatGoogleGenerativeAI(
 
 
 # ==========================
+# Helper Function
+# ==========================
+
+def extract_text_content(content):
+    """
+    Converts LangChain/Gemini response content into plain text.
+
+    Gemini may return either:
+    - a normal string, or
+    - a list of content blocks containing text.
+    """
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        text_parts = []
+
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text", "")
+                if text:
+                    text_parts.append(text)
+
+            elif isinstance(block, str):
+                text_parts.append(block)
+
+        return "\n".join(text_parts)
+
+    return str(content)
+
+
+# ==========================
 # Reflection / Critic Step
 # ==========================
 
@@ -83,7 +116,7 @@ unsupported, or inconsistent information.
 
     response = llm.invoke(reflection_prompt)
 
-    return response.content
+    return extract_text_content(response.content)
 
 
 # ==========================
@@ -140,7 +173,7 @@ Follow these rules:
 
     response = llm.invoke(refinement_prompt)
 
-    return response.content
+    return extract_text_content(response.content)
 
 
 # ==========================
