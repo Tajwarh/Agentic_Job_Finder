@@ -1,167 +1,111 @@
 import os
-import time
+import warnings
 from dotenv import load_dotenv
-from google import genai
-from google.genai.errors import ServerError, ClientError
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from config import DEFAULT_MODEL, REQUIREMENTS_PROMPT_TEMPLATE, MATCHING_PROMPT_TEMPLATE
+
+# Suppress fixed sampling warning for models that do not support custom temperature
+warnings.filterwarnings("ignore", message=".*uses fixed sampling defaults.*")
 
 # Load environment variables
 load_dotenv()
 
-API_KEY = os.getenv("GEMINI_API_KEY")
+API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if API_KEY and not os.getenv("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = API_KEY
 
-client = genai.Client(api_key=API_KEY)
 
-
-def call_gemini(prompt):
+def get_llm(temperature: float = 0.2):
     """
-    Send a prompt to Gemini with basic error handling.
+    Instantiate LangChain ChatGoogleGenerativeAI client.
     """
-
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt
-            )
-
-            return response.text
-
-        except ServerError:
-            if attempt < 2:
-                print("Gemini is busy. Retrying...")
-                time.sleep(5)
-            else:
-                return None
-
-        except ClientError as error:
-            error_message = str(error)
-
-            if "429" in error_message or "RESOURCE_EXHAUSTED" in error_message:
-                print("Gemini request limit reached.")
-                return None
-
-            print(f"Gemini API error: {error}")
-            return None
-
-    return None
+    kwargs = {
+        "model": DEFAULT_MODEL,
+        "google_api_key": API_KEY,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    return ChatGoogleGenerativeAI(**kwargs)
 
 
-def extract_requirements(job):
+# LangChain LCEL Chains
+llm = get_llm()
+
+requirements_prompt = ChatPromptTemplate.from_template(REQUIREMENTS_PROMPT_TEMPLATE)
+requirements_chain = requirements_prompt | llm | StrOutputParser()
+
+matching_prompt = ChatPromptTemplate.from_template(MATCHING_PROMPT_TEMPLATE)
+matching_chain = matching_prompt | llm | StrOutputParser()
+
+
+def extract_requirements(job: dict) -> str:
     """
-    PROMPT CHAIN - STEP 1
-
+    PROMPT CHAIN - STEP 1 (LangChain LCEL)
     Extract important requirements from the real job posting.
     """
-
-    prompt = f"""
-You are a job requirements extraction assistant.
-
-Analyze the following real job posting.
-
-Job title:
-{job.get("title")}
-
-Company:
-{job.get("company")}
-
-Job description:
-{job.get("description")}
-
-Extract only the important requirements mentioned in the job description.
-
-Return a concise list containing:
-
-1. Required or important skills
-2. Preferred or desired skills
-3. Important responsibilities
-
-Do not invent requirements that are not supported by the job description.
-"""
-
-    return call_gemini(prompt)
+    try:
+        return requirements_chain.invoke({
+            "title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "description": job.get("description", "")
+        })
+    except Exception as e:
+        print(f"Error during LangChain requirements extraction: {e}")
+        return ""
 
 
-def match_candidate(job, requirements, user_skills):
+def match_candidate(job: dict, requirements: str, user_skills: list[str]) -> str:
     """
-    PROMPT CHAIN - STEP 2
-
-    Use the output from Step 1 to evaluate the candidate.
+    PROMPT CHAIN - STEP 2 (LangChain LCEL)
+    Evaluate the candidate match against the extracted requirements.
     """
-
-    prompt = f"""
-You are a job matching assistant.
-
-The previous AI step extracted these requirements
-from the job posting:
-
-{requirements}
-
-Candidate skills:
-{", ".join(user_skills)}
-
-Job title:
-{job.get("title")}
-
-Company:
-{job.get("company")}
-
-Using the extracted requirements and candidate skills,
-evaluate how well the candidate matches this job.
-
-Return a concise analysis containing:
-
-1. Match Score: a number from 0 to 100
-2. Matching Skills
-3. Missing or Desired Skills
-4. Short Explanation
-
-Only use the candidate skills provided above.
-Do not invent candidate experience or skills.
-"""
-
-    return call_gemini(prompt)
+    try:
+        skills_str = ", ".join(user_skills) if user_skills else "None specified"
+        return matching_chain.invoke({
+            "title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "requirements": requirements,
+            "skills": skills_str
+        })
+    except Exception as e:
+        print(f"Error during LangChain candidate matching: {e}")
+        return ""
 
 
-def analyze_job(job, user_skills):
+def analyze_job(job: dict, user_skills: list[str]) -> str:
     """
-    Complete two-step prompt chaining workflow.
+    Complete two-step LangChain prompt chaining workflow.
 
     Step 1:
-    Job description -> Extract requirements
+    Job description -> Extract requirements via LCEL
 
     Step 2:
-    Extracted requirements + candidate skills -> Match analysis
+    Extracted requirements + candidate skills -> Match analysis via LCEL
     """
-
-    print("Prompt Chain Step 1: Extracting job requirements...")
-
+    print("LangChain Prompt Chain Step 1: Extracting job requirements...")
     requirements = extract_requirements(job)
 
     if not requirements:
         return (
             "Job analysis could not be completed because "
-            "Gemini is temporarily unavailable or the request limit was reached."
+            "the LLM request failed or limit was reached."
         )
 
-    print("Prompt Chain Step 2: Evaluating candidate match...")
-
-    analysis = match_candidate(
-        job,
-        requirements,
-        user_skills
-    )
+    print("LangChain Prompt Chain Step 2: Evaluating candidate match...")
+    analysis = match_candidate(job, requirements, user_skills)
 
     if not analysis:
         return (
             "Job requirements were extracted, but the final match "
-            "analysis could not be completed because Gemini is "
-            "temporarily unavailable or the request limit was reached."
+            "analysis could not be completed."
         )
 
     return analysis
 
 
-# Simple standalone test
 if __name__ == "__main__":
     test_job = {
         "title": "Business Analyst",

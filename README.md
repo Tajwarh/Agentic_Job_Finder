@@ -26,11 +26,11 @@ The final project demonstrates five Agentic AI design patterns.
 
 ### 1. Prompt Chaining
 
-Implemented.
+Implemented using LangChain LCEL (LangChain Expression Language).
 
-Prompt 1 extracts important requirements from the job description.
+Prompt 1 extracts important requirements from the job description via `requirements_prompt | llm | StrOutputParser()`.
 
-Prompt 2 receives the extracted requirements and compares them with the candidate's skills.
+Prompt 2 receives the extracted requirements and compares them with the candidate's skills via `matching_prompt | llm | StrOutputParser()`.
 
 Flow:
 
@@ -50,15 +50,18 @@ Match Score + Analysis
 
 ### 2. Routing
 
-To be implemented.
+Implemented using LangChain `with_structured_output(JobRequest)`.
 
-The system will route requests to appropriate workflows based on the user's intent.
+The system extracts parameters (`roles`, `location`, `skills`) and detects intent from natural language user prompts via `router_prompt | llm.with_structured_output(JobRequest)`, routing to one of three specialized handlers:
+- `handler_match_jobs`: Searches jobs and executes LangChain Prompt Chaining match analysis.
+- `handler_list_jobs`: Searches and lists relevant job postings without full match scoring.
+- `handler_resume_creator`: Drafts a tailored resume profile with ATS recommendations via LangChain LCEL.
 
 ### 3. Parallelization
 
-To be implemented.
+Implemented via **Parallel Tool Calling**.
 
-Independent job postings will be analyzed concurrently to improve processing speed.
+When searches across multiple roles or locations are requested, the LLM generates multiple tool calls that are executed concurrently in parallel via `ThreadPoolExecutor`, speeding up retrieval.
 
 ### 4. Reflection
 
@@ -68,9 +71,9 @@ A critic/reflection step will review generated recommendations and identify unsu
 
 ### 5. Tool Use
 
-Implemented.
+Implemented with LangChain `@tool` (`search_jobs`).
 
-The project uses the Adzuna API to retrieve real job postings instead of simulated job data.
+The LLM is bound with external tools (`llm.bind_tools([search_jobs])`), inspects the user query, autonomously selects the tool, formulates arguments, and executes the search against the Adzuna API.
 
 ## Current Features
 
@@ -92,14 +95,18 @@ The project uses the Adzuna API to retrieve real job postings instead of simulat
 ```text
 Agentic_Job_Finder/
 ├── agents/
-│   └── job_analyzer.py
+│   ├── job_analyzer.py
+│   ├── router.py
+│   └── search_agent.py
 ├── tools/
 │   └── job_search.py
 ├── .env.example
 ├── .gitignore
+├── config.py
 ├── main.py
 ├── README.md
-└── requirements.txt
+├── requirements.txt
+└── utils.py
 ```
 
 ## Setup
