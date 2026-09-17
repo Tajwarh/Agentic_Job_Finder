@@ -1,123 +1,135 @@
 # Agentic Job Finder
+# Team Members:
+# Asim Upreti
+# Tajwar-Ul Hoque
 
-Agentic Job Finder is an Agentic AI class project that searches for real job postings and uses AI to evaluate how well a candidate's skills match those jobs.
+**Agentic Job Finder** is an autonomous, multi-agent AI system that searches real-world job postings via the Adzuna API and uses Google Gemini (via LangChain) to evaluate, critique, and match candidates' skills against live job opportunities.
 
-## Current Workflow
+The project demonstrates all five core **Agentic AI Design Patterns**:
+1. **Prompt Chaining**
+2. **Routing**
+3. **Parallelization (Parallel Tool Calling)**
+4. **Reflection (Critic & Refinement)**
+5. **Tool Use (LangChain Tool Calling)**
 
-The user enters:
+---
 
-- Job roles
-- Location
-- Skills
+## Workflow Overview
 
-The system then:
+1. **User Prompt**: The user enters a single freeform natural-language request (e.g., *"Find and match Senior Business Analyst jobs in Texas for Python and SQL"*).
+2. **Routing & Parameter Extraction**: A LangChain routing agent extracts structured parameters (`roles`, `location`, `skills`) and identifies the user's intent (`handler_match_jobs`, `handler_list_jobs`, or `handler_resume_creator`).
+3. **Tool Calling & Parallel Search**: For job searches, an agent bound with the `search_jobs` tool autonomously generates tool calls and executes them concurrently in parallel across threads.
+4. **Deduplication**: Results are de-duplicated by title, company, and location.
+5. **Prompt Chaining Analysis**:
+   - **Step 1**: Extracts hard and soft requirements, responsibilities, and qualifications from the raw posting.
+   - **Step 2**: Evaluates candidate fit, producing an initial match score, matching skills, missing skills, and explanation.
+6. **Reflection & Self-Correction**: A reflection critic audits the match analysis to prevent hallucinated candidate skills or unsupported claims, refining the analysis if inconsistencies are found before presenting the final result.
 
-1. Searches for real jobs using the Adzuna API.
-2. Supports multiple job roles and locations.
-3. Removes duplicate job postings.
-4. Uses Gemini to extract requirements from each job.
-5. Passes the extracted requirements to a second prompt.
-6. Compares the requirements with the user's skills.
-7. Produces a match score, matching skills, missing skills, and an explanation.
+---
 
 ## Agentic AI Design Patterns
 
-The final project demonstrates five Agentic AI design patterns.
-
 ### 1. Prompt Chaining
+**Implemented** using LangChain LCEL in [`agents/job_analyzer.py`](agents/job_analyzer.py).
 
-Implemented using LangChain LCEL (LangChain Expression Language).
-
-Prompt 1 extracts important requirements from the job description via `requirements_prompt | llm | StrOutputParser()`.
-
-Prompt 2 receives the extracted requirements and compares them with the candidate's skills via `matching_prompt | llm | StrOutputParser()`.
-
-Flow:
+The analysis workflow breaks complex evaluation into a sequential two-step pipeline:
+- **Prompt 1 (Requirements Extraction)**: Analyzes raw job descriptions and extracts required/preferred skills and key responsibilities via `requirements_prompt | llm | StrOutputParser()`.
+- **Prompt 2 (Candidate Matching)**: Compares the extracted requirements against candidate skills to generate an evidence-grounded score (0–100) and gap analysis via `matching_prompt | llm | StrOutputParser()`.
 
 ```text
-Job Description
-      ↓
-Prompt 1
-Extract Requirements
-      ↓
-Extracted Requirements
-      ↓
-Prompt 2
-Candidate Matching
-      ↓
-Match Score + Analysis
+Raw Job Description
+       ↓
+[Prompt 1: Extract Requirements]
+       ↓
+Extracted Job Requirements
+       ↓
+[Prompt 2: Candidate Match Evaluation]
+       ↓
+Initial Match Analysis
 ```
 
 ### 2. Routing
+**Implemented** using LangChain Structured Outputs in [`agents/router.py`](agents/router.py).
 
-Implemented using LangChain `with_structured_output(JobRequest)`.
-
-The system extracts parameters (`roles`, `location`, `skills`) and detects intent from natural language user prompts via `router_prompt | llm.with_structured_output(JobRequest)`, routing to one of three specialized handlers:
-- `handler_match_jobs`: Searches jobs and executes LangChain Prompt Chaining match analysis.
-- `handler_list_jobs`: Searches and lists relevant job postings without full match scoring.
-- `handler_resume_creator`: Drafts a tailored resume profile with ATS recommendations via LangChain LCEL.
+The router inspects natural language prompts and classifies intent into one of three specialized handlers using `router_prompt | llm.with_structured_output(JobRequest)`:
+- `handler_match_jobs`: Full end-to-end pipeline (search + prompt chaining + reflection).
+- `handler_list_jobs`: Fast search and clean job listing without deep matching.
+- `handler_resume_creator`: Generates a targeted resume draft and ATS keyword optimization plan.
 
 ### 3. Parallelization
+**Implemented** via **Parallel Tool Calling** in [`agents/search_agent.py`](agents/search_agent.py).
 
-Implemented via **Parallel Tool Calling**.
-
-When searches across multiple roles or locations are requested, the LLM generates multiple tool calls that are executed concurrently in parallel via `ThreadPoolExecutor`, speeding up retrieval.
+When queries involve multiple roles (e.g., *"Business Analyst and Data Scientist"*) or multiple locations, the LLM emits multiple tool calls simultaneously. The search agent executes these tool calls concurrently in parallel using Python's `concurrent.futures.ThreadPoolExecutor`, significantly reducing latency.
 
 ### 4. Reflection
+**Implemented** via a **Critic & Refinement Loop** in [`agents/reflection_agent.py`](agents/reflection_agent.py).
 
-To be implemented.
-
-A critic/reflection step will review generated recommendations and identify unsupported or inconsistent results.
+After an initial match analysis is generated, the Reflection Agent acts as an evaluator:
+1. **Critique (`reflect_on_analysis`)**: Checks whether the analysis invented candidate skills, asserted unsupported missing requirements, or produced an inconsistent match score. Decides either `DECISION: APPROVE` or `DECISION: REVISE` with rationale.
+2. **Refinement (`refine_analysis`)**: If revision is required, a second pass regenerates the analysis correcting all flagged inaccuracies.
+3. **Approval**: If approved, the initial analysis is confirmed and displayed.
 
 ### 5. Tool Use
+**Implemented** with LangChain `@tool` in [`tools/job_search.py`](tools/job_search.py).
 
-Implemented with LangChain `@tool` (`search_jobs`).
+The `search_jobs` tool wraps the real-world Adzuna Job Search API. The LLM is equipped with this tool (`llm.bind_tools([search_jobs])`), interprets query requirements, formulates arguments, and executes live queries.
 
-The LLM is bound with external tools (`llm.bind_tools([search_jobs])`), inspects the user query, autonomously selects the tool, formulates arguments, and executes the search against the Adzuna API.
-
-## Current Features
-
-- Real job search using Adzuna
-- Multiple job-role search
-- Flexible location search
-- Related job discovery
-- Duplicate job filtering
-- Gemini AI integration
-- Two-step prompt chaining
-- Candidate-job skill matching
-- Match scores
-- Matching skill identification
-- Missing skill identification
-- API error handling for temporary server and quota errors
+---
 
 ## Project Structure
 
 ```text
 Agentic_Job_Finder/
 ├── agents/
-│   ├── job_analyzer.py
-│   ├── router.py
-│   └── search_agent.py
+│   ├── job_analyzer.py      # Prompt Chaining (Step 1 requirements & Step 2 matching)
+│   ├── reflection_agent.py  # Reflection (Critic evaluation & Refinement loop)
+│   ├── router.py            # Intent classification & parameter extraction
+│   └── search_agent.py      # Tool Use & Parallel Tool Calling agent
 ├── tools/
-│   └── job_search.py
-├── .env.example
+│   └── job_search.py        # LangChain @tool wrapping the Adzuna API
+├── .env.example             # Environment variable template
 ├── .gitignore
-├── config.py
-├── main.py
-├── README.md
-├── requirements.txt
-└── utils.py
+├── config.py                # Centralized prompts and model settings
+├── main.py                  # CLI entry point and handler dispatching
+├── README.md                # Project documentation
+├── report.md                # Detailed technical report on design patterns
+├── requirements.txt         # Project dependencies
+└── utils.py                 # Centralized deduplication utilities
 ```
 
-## Setup
+---
 
-Install the required packages:
+## Setup Instructions
+
+### 1. Prerequisites
+- Python 3.10+ (tested with Python 3.11 - 3.14)
+- Google Gemini API key ([Google AI Studio](https://aistudio.google.com/))
+- Adzuna API credentials ([Adzuna Developer Portal](https://developer.adzuna.com/))
+
+### 2. Environment Setup
+
+Clone or open the project folder, then create and activate a virtual environment:
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+# On macOS / Linux:
+source .venv/bin/activate
+# On Windows:
+# .venv\Scripts\activate
+```
+
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root and add:
+### 4. Configure API Keys
+
+Create a `.env` file in the project root:
 
 ```text
 ADZUNA_APP_ID=your_adzuna_app_id
@@ -125,40 +137,39 @@ ADZUNA_APP_KEY=your_adzuna_app_key
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
-Do not commit the `.env` file or share your actual API keys.
+*(Optional: configure `GEMINI_MODEL=gemini-2.0-flash` or `gemini-3.6-flash` in `.env` if desired).*
 
-## Run
+---
 
-Run the application with:
+## How to Run
+
+Launch the application:
 
 ```bash
 python main.py
 ```
 
-Example input:
+### Example Usage Scenarios
 
+#### Scenario A: Full Job Match (Routing + Parallel Tool Calling + Prompt Chaining + Reflection)
 ```text
-Enter job roles (comma-separated): Business Analyst, Product Manager
-Enter location (example: United States, New Mexico, Texas): Texas
-Enter your skills (comma-separated): Python, SQL, Excel, Agile, Communication
+Enter your request: Find and match Data Analyst and Business Analyst jobs in Texas for Python, SQL, Tableau
 ```
+- **Routing**: Detects `handler_match_jobs`, `roles=['Data Analyst', 'Business Analyst']`, `location=['Texas']`, `skills=['Python', 'SQL', 'Tableau']`.
+- **Parallel Tool Calling**: Launches 2 concurrent calls to `search_jobs` simultaneously.
+- **Prompt Chaining**: Extracts requirements and evaluates skills for each job.
+- **Reflection**: Evaluates the analysis for accuracy and applies revisions if needed.
 
-The system searches for real job postings and analyzes how well the candidate's skills match the retrieved jobs.
+#### Scenario B: Quick Job Listing (Tool Use)
+```text
+Enter your request: List remote Software Engineer jobs
+```
+- **Routing**: Detects `handler_list_jobs`.
+- **Tool Use**: Invokes `search_jobs` and prints structured job previews with descriptions and URLs.
 
-## API Error Handling
-
-The system handles common Gemini API errors.
-
-- Temporary server errors are retried.
-- Request/quota limit errors are handled without crashing the entire application.
-- If an analysis cannot be completed, the program can continue processing other jobs.
-
-## Remaining Development
-
-The next development stage will add:
-
-- Routing
-- Parallel job analysis
-- Reflection/critic agent
-- Final job ranking
-- User interface
+#### Scenario C: Tailored Resume Creation (Routing + Generation)
+```text
+Enter your request: Build a resume for a Machine Learning Engineer with skills Python, PyTorch, Docker
+```
+- **Routing**: Detects `handler_resume_creator`.
+- **Generation**: Produces a professional summary, core competencies, bullet points, and ATS keywords.
